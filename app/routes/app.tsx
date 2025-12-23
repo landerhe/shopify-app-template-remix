@@ -26,6 +26,7 @@ export default function App() {
         </Link>
         <Link to="/app/additional">Additional page</Link>
         <Link to="/app/inventory-reset">Inventory reset</Link>
+        <Link to="/app/inventory-scan">Inventory scan</Link>
       </NavMenu>
       <Outlet />
     </AppProvider>

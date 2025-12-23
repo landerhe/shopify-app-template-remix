@@ -140,6 +140,9 @@ export default function InventoryResetRoute() {
                 </Banner>
 
                 <InlineStack gap="300" align="end">
+                  <Button url="/app/inventory-scan" variant="plain">
+                    Scan inventory policies
+                  </Button>
                   <Button
                     tone="critical"
                     variant="primary"

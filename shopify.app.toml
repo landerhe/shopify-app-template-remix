@@ -2,7 +2,7 @@
 
 client_id = "f230cd74a317e5cb7a51f2e696c41f73"
 name = "initi"
-application_url = "https://shopify-app-initial-setup.fly.dev"
+application_url = "https://shopify-app-template-remix-pearl.vercel.app"
 embedded = true
 
 [build]
@@ -25,7 +25,7 @@ scopes = "read_locations,write_inventory,write_products"
 
 [auth]
 redirect_urls = [
-  "https://shopify-app-initial-setup.fly.dev/auth/callback",
-  "https://shopify-app-initial-setup.fly.dev/auth/shopify/callback",
-  "https://shopify-app-initial-setup.fly.dev/api/auth/callback"
+  "https://shopify-app-template-remix-pearl.vercel.app/auth/callback",
+  "https://shopify-app-template-remix-pearl.vercel.app/auth/shopify/callback",
+  "https://shopify-app-template-remix-pearl.vercel.app/api/auth/callback"
 ]
