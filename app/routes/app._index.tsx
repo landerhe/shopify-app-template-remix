@@ -364,7 +364,7 @@ export default function Index() {
                           {archiveResult.sampleErrors.slice(0, 10).map((e, idx) => (
                             <List.Item key={`${e.scope}-${idx}`}>
                               {e.scope}: {e.message}
-                              {e.code ? ` (${e.code})` : ""}
+                              {e.field?.length ? ` (field: ${e.field.join(".")})` : ""}
                             </List.Item>
                           ))}
                         </List>
@@ -531,7 +531,11 @@ type ArchivePeruzzoResult = {
   archived: number;
   alreadyArchived: number;
   userErrors: number;
-  sampleErrors: Array<{ scope: string; message: string; code?: string }>;
+  sampleErrors: Array<{
+    scope: string;
+    message: string;
+    field?: string[];
+  }>;
 };
 
 async function archiveProductsByVendor(
@@ -579,7 +583,7 @@ async function archiveProductsByVendor(
       const res = await graphqlJson<{
         productUpdate: {
           product?: { id: string; status: string } | null;
-          userErrors: Array<{ message: string; code?: string | null }>;
+          userErrors: Array<{ message: string; field?: string[] | null }>;
         };
       }>(
         admin,
@@ -587,7 +591,7 @@ async function archiveProductsByVendor(
           mutation ArchiveProduct($id: ID!) {
             productUpdate(input: { id: $id, status: ARCHIVED }) {
               product { id status }
-              userErrors { message code }
+              userErrors { message field }
             }
           }`,
         { id: p.id },
@@ -602,7 +606,7 @@ async function archiveProductsByVendor(
             result.sampleErrors.push({
               scope: "productUpdate",
               message: e.message,
-              code: e.code || undefined,
+              field: e.field || undefined,
             });
           }
         }
