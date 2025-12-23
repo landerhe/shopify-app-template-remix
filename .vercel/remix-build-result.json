@@ -17,6 +17,7 @@
       "routes/_index": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0",
       "routes/auth.$": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0",
       "routes/app.inventory-reset": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0",
+      "routes/app.inventory-scan": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0",
       "routes/app.additional": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0",
       "routes/app._index": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0"
     },
@@ -93,6 +94,15 @@
         "parentId": "routes/app",
         "file": "app/routes/app.inventory-reset.tsx",
         "path": "inventory-reset",
+        "config": {
+          "runtime": "nodejs"
+        }
+      },
+      "routes/app.inventory-scan": {
+        "id": "routes/app.inventory-scan",
+        "parentId": "routes/app",
+        "file": "app/routes/app.inventory-scan.tsx",
+        "path": "inventory-scan",
         "config": {
           "runtime": "nodejs"
         }
@@ -185,6 +195,12 @@
         "parentId": "routes/app",
         "file": "routes/app.inventory-reset.tsx",
         "path": "inventory-reset"
+      },
+      "routes/app.inventory-scan": {
+        "id": "routes/app.inventory-scan",
+        "parentId": "routes/app",
+        "file": "routes/app.inventory-scan.tsx",
+        "path": "inventory-scan"
       },
       "routes/app.additional": {
         "id": "routes/app.additional",
