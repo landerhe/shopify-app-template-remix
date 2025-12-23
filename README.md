@@ -39,6 +39,27 @@ shopify app init --template=https://github.com/Shopify/shopify-app-template-remi
 shopify app dev
 ```
 
+## Inventory reset tool (this app)
+
+This app includes an embedded admin page at **Inventory reset** (`/app/inventory-reset`) with a single button that:
+
+- Sets **available inventory to 0** for every stocked inventory item across **all locations**
+- Sets variant inventory policy to **DENY** (unchecks “Continue selling when out of stock”)
+
+### Required scopes
+
+These scopes are configured in `shopify.app.toml`:
+
+- `write_products`
+- `write_inventory`
+- `read_locations`
+
+If you change scopes, run `npm run deploy` and reinstall the app in your dev store.
+
+### Performance / rate limits
+
+For stores with many variants and locations, this operation can take time and may hit Shopify API limits. The implementation batches requests and will return a summary plus sample errors in the UI.
+
 
 
 Local development is powered by [the Shopify CLI](https://shopify.dev/docs/apps/tools/cli). It logs into your partners account, connects to an app, provides environment variables, updates remote config, creates a tunnel and provides commands to generate extensions.
@@ -130,7 +151,39 @@ When you reach the step for [setting up environment variables](https://shopify.d
 
 ### Hosting on Vercel
 
-Using the Vercel Preset is recommended when hosting your Shopify Remix app on Vercel. You'll also want to ensure imports that would normally come from `@remix-run/node` are imported from `@vercel/remix` instead. Learn more about hosting Remix apps on Vercel [here](https://vercel.com/docs/frameworks/remix).
+Using the Vercel preset is recommended when hosting this app on Vercel. This repo is already configured with:
+
+- `@vercel/remix` + `vercelPreset()` in `vite.config.ts`
+- a `vercel-build` script that runs Prisma generate + pushes the schema
+- `vercel.json` that tells Vercel to use `npm run vercel-build`
+
+Learn more about hosting Remix apps on Vercel [here](https://vercel.com/docs/frameworks/remix).
+
+#### Database: Neon Postgres (recommended for Vercel)
+
+Vercel doesn’t support SQLite in production. This repo is configured to use **Postgres** via Prisma (`prisma/schema.prisma`).
+
+Recommended env var setup (to support pooled connections + safe migrations/push):
+
+- `DATABASE_URL`: pooled connection string (PgBouncer / “Prisma” URL)
+- `DIRECT_URL`: non-pooled “direct” connection string
+
+If you use the **Vercel ↔ Neon integration**, Vercel commonly provides Postgres env vars like:
+
+- `POSTGRES_PRISMA_URL` (pooled)
+- `POSTGRES_URL_NON_POOLING` (direct)
+
+In Vercel Project → Settings → Environment Variables:
+
+- set `DATABASE_URL` = value of `POSTGRES_PRISMA_URL`
+- set `DIRECT_URL` = value of `POSTGRES_URL_NON_POOLING`
+
+Also set Shopify env vars:
+
+- `SHOPIFY_API_KEY`
+- `SHOPIFY_API_SECRET`
+- `SHOPIFY_APP_URL` (your Vercel production URL, e.g. `https://your-app.vercel.app`)
+- `SCOPES` (must match `shopify.app.toml`)
 
 ```diff
 // vite.config.ts
