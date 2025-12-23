@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "f230cd74a317e5cb7a51f2e696c41f73"
+client_id = "d425e086c37b1205e031b78ee04b8bad"
 name = "initi"
 application_url = "https://shopify-app-template-remix-pearl.vercel.app"
 embedded = true
