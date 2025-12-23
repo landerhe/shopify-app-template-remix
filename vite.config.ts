@@ -18,8 +18,18 @@ if (
   delete process.env.HOST;
 }
 
-const host = new URL(process.env.SHOPIFY_APP_URL || "http://localhost")
-  .hostname;
+// Vercel commonly provides hostnames without a scheme (e.g. VERCEL_URL=foo.vercel.app).
+// Normalize to a full URL so `new URL()` doesn't throw.
+const rawAppUrl =
+  process.env.SHOPIFY_APP_URL || process.env.VERCEL_URL || "http://localhost";
+const normalizedAppUrl =
+  rawAppUrl.startsWith("http://") || rawAppUrl.startsWith("https://")
+    ? rawAppUrl
+    : `https://${rawAppUrl}`;
+
+process.env.SHOPIFY_APP_URL = normalizedAppUrl;
+
+const host = new URL(normalizedAppUrl).hostname;
 
 let hmrConfig;
 if (host === "localhost") {
