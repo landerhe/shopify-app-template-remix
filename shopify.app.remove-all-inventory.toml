@@ -2,17 +2,30 @@
 
 client_id = "849a767aaf9b55c415a341e52ed48a11"
 name = "Remove All Inventory"
-application_url = "https://example.com"
+application_url = "https://shopify-app-template-remix-pearl.vercel.app"
 embedded = true
 
+[build]
+automatically_update_urls_on_dev = true
+
 [webhooks]
-api_version = "2025-10"
+api_version = "2026-01"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/scopes_update" ]
+  uri = "/webhooks/app/scopes_update"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = ""
-optional_scopes = [ ]
-use_legacy_install_flow = false
+scopes = "read_locations,write_inventory,write_products"
 
 [auth]
-redirect_urls = [ ]
+redirect_urls = [
+  "https://shopify-app-template-remix-pearl.vercel.app/auth/callback",
+  "https://shopify-app-template-remix-pearl.vercel.app/auth/shopify/callback",
+  "https://shopify-app-template-remix-pearl.vercel.app/api/auth/callback"
+]
