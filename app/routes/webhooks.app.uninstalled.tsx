@@ -1,17 +1,27 @@
 import type { ActionFunctionArgs } from "@remix-run/node";
-import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import {
+  readShopifyWebhookJson,
+  verifyShopifyWebhookRequest,
+} from "../utils/shopify-webhook.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { shop, session, topic } = await authenticate.webhook(request);
+  // Catch & Release: verify quickly, enqueue work, return 200 immediately.
+  const auth = await verifyShopifyWebhookRequest(request);
+  if (!auth.ok) return new Response(auth.message, { status: auth.status });
 
-  console.log(`Received ${topic} webhook for ${shop}`);
+  const { rawBody, json } = await readShopifyWebhookJson(request);
 
-  // Webhook requests can trigger multiple times and after an app has already been uninstalled.
-  // If this webhook already ran, the session may have been deleted previously.
-  if (session) {
-    await db.session.deleteMany({ where: { shop } });
-  }
+  await db.webhookEvent.create({
+    data: {
+      topic: auth.topic,
+      shop: auth.shop,
+      webhookId: auth.webhookId,
+      apiVersion: auth.apiVersion,
+      payload: json as any,
+    },
+  });
 
-  return new Response();
+  // Intentionally no synchronous deletion here; Vercel functions should respond fast.
+  return new Response("OK", { status: 200 });
 };

@@ -14,6 +14,13 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+enum WebhookEventStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+}
+
 model Session {
   id                  String    @id
   shop                String
@@ -32,4 +39,21 @@ model Session {
   emailVerified       Boolean?  @default(false)
   refreshToken        String?
   refreshTokenExpires DateTime?
+}
+
+model WebhookEvent {
+  id         String             @id @default(cuid())
+  topic      String
+  shop       String
+  webhookId  String?
+  apiVersion String?
+  payload    Json
+  status     WebhookEventStatus @default(PENDING)
+  attempts   Int                @default(0)
+  lastError  String?
+  createdAt  DateTime           @default(now())
+  processedAt DateTime?
+
+  @@index([status, createdAt])
+  @@index([shop, topic, createdAt])
 }

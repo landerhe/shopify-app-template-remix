@@ -1,21 +1,26 @@
 import type { ActionFunctionArgs } from "@remix-run/node";
-import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import {
+  readShopifyWebhookJson,
+  verifyShopifyWebhookRequest,
+} from "../utils/shopify-webhook.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-    const { payload, session, topic, shop } = await authenticate.webhook(request);
-    console.log(`Received ${topic} webhook for ${shop}`);
+  // Catch & Release: verify quickly, enqueue work, return 200 immediately.
+  const auth = await verifyShopifyWebhookRequest(request);
+  if (!auth.ok) return new Response(auth.message, { status: auth.status });
 
-    const current = payload.current as string[];
-    if (session) {
-        await db.session.update({   
-            where: {
-                id: session.id
-            },
-            data: {
-                scope: current.toString(),
-            },
-        });
-    }
-    return new Response();
+  const { json } = await readShopifyWebhookJson(request);
+
+  await db.webhookEvent.create({
+    data: {
+      topic: auth.topic,
+      shop: auth.shop,
+      webhookId: auth.webhookId,
+      apiVersion: auth.apiVersion,
+      payload: json as any,
+    },
+  });
+
+  return new Response("OK", { status: 200 });
 };
