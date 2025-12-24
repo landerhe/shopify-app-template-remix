@@ -2,7 +2,7 @@
 
 client_id = "849a767aaf9b55c415a341e52ed48a11"
 name = "Remove All Inventory"
-application_url = "https://shopify-app-template-remix-pearl.vercel.app"
+application_url = "https://settozero.vercel.app"
 embedded = true
 
 [build]
@@ -25,7 +25,7 @@ scopes = "read_locations,write_inventory,write_products"
 
 [auth]
 redirect_urls = [
-  "https://shopify-app-template-remix-pearl.vercel.app/auth/callback",
-  "https://shopify-app-template-remix-pearl.vercel.app/auth/shopify/callback",
-  "https://shopify-app-template-remix-pearl.vercel.app/api/auth/callback"
+  "https://settozero.vercel.app/auth/callback",
+  "https://settozero.vercel.app/auth/shopify/callback",
+  "https://settozero.vercel.app/api/auth/callback"
 ]
