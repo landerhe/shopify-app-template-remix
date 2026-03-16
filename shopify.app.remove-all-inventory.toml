@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "849a767aaf9b55c415a341e52ed48a11"
+client_id = "f230cd74a317e5cb7a51f2e696c41f73"
 name = "Remove All Inventory"
 application_url = "https://settozero.vercel.app"
 embedded = true

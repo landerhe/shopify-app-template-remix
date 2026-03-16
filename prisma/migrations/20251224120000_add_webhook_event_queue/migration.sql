@@ -25,3 +25,4 @@ CREATE INDEX "WebhookEvent_status_createdAt_idx" ON "WebhookEvent"("status", "cr
 CREATE INDEX "WebhookEvent_shop_topic_createdAt_idx" ON "WebhookEvent"("shop", "topic", "createdAt");
 
 
+
