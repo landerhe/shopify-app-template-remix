@@ -84,7 +84,7 @@ export default function InventoryScanRoute() {
   };
 
   return (
-    <Page>
+    <Page backAction={{ content: "Home", url: "/app" }}>
       <TitleBar title="Inventory policy scan" />
       <Layout>
         <Layout.Section>

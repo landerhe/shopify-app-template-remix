@@ -17,6 +17,8 @@ const shopify = shopifyApp({
   sessionStorage: new PrismaSessionStorage(prisma),
   distribution: AppDistribution.AppStore,
   future: {
+    // Enables session token auth for embedded apps (Built for Shopify requirement).
+    // Tokens are automatically included in requests via App Bridge.
     unstable_newEmbeddedAuthStrategy: true,
     removeRest: true,
     expiringOfflineAccessTokens: true,

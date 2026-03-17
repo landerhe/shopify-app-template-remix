@@ -12,7 +12,7 @@ import { TitleBar } from "@shopify/app-bridge-react";
 
 export default function AdditionalPage() {
   return (
-    <Page>
+    <Page backAction={{ content: "Home", url: "/app" }}>
       <TitleBar title="Additional page" />
       <Layout>
         <Layout.Section>

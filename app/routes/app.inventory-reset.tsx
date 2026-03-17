@@ -92,7 +92,7 @@ export default function InventoryResetRoute() {
   };
 
   return (
-    <Page>
+    <Page backAction={{ content: "Home", url: "/app" }}>
       <TitleBar title="Inventory reset" />
       <Layout>
         <Layout.Section>

@@ -10,8 +10,12 @@
       }
     },
     "routeIdToServerBundleId": {
+      "routes/webhooks.customers.data_request": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0",
       "routes/webhooks.app.scopes_update": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0",
+      "routes/webhooks.customers.redact": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0",
       "routes/webhooks.app.uninstalled": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0",
+      "routes/webhooks.shop.redact": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0",
+      "routes/webhooks.compliance": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0",
       "routes/auth.login": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0",
       "routes/healthz": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0",
       "routes/_index": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0",
@@ -19,6 +23,7 @@
       "routes/app.inventory-reset": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0",
       "routes/app.inventory-scan": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0",
       "routes/app.additional": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0",
+      "routes/app.archive": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0",
       "routes/app._index": "nodejs-eyJydW50aW1lIjoibm9kZWpzIn0"
     },
     "routes": {
@@ -27,6 +32,15 @@
         "id": "root",
         "file": "app/root.tsx",
         "config": {}
+      },
+      "routes/webhooks.customers.data_request": {
+        "id": "routes/webhooks.customers.data_request",
+        "parentId": "root",
+        "file": "app/routes/webhooks.customers.data_request.tsx",
+        "path": "webhooks/customers/data_request",
+        "config": {
+          "runtime": "nodejs"
+        }
       },
       "routes/webhooks.app.scopes_update": {
         "id": "routes/webhooks.app.scopes_update",
@@ -37,11 +51,38 @@
           "runtime": "nodejs"
         }
       },
+      "routes/webhooks.customers.redact": {
+        "id": "routes/webhooks.customers.redact",
+        "parentId": "root",
+        "file": "app/routes/webhooks.customers.redact.tsx",
+        "path": "webhooks/customers/redact",
+        "config": {
+          "runtime": "nodejs"
+        }
+      },
       "routes/webhooks.app.uninstalled": {
         "id": "routes/webhooks.app.uninstalled",
         "parentId": "root",
         "file": "app/routes/webhooks.app.uninstalled.tsx",
         "path": "webhooks/app/uninstalled",
+        "config": {
+          "runtime": "nodejs"
+        }
+      },
+      "routes/webhooks.shop.redact": {
+        "id": "routes/webhooks.shop.redact",
+        "parentId": "root",
+        "file": "app/routes/webhooks.shop.redact.tsx",
+        "path": "webhooks/shop/redact",
+        "config": {
+          "runtime": "nodejs"
+        }
+      },
+      "routes/webhooks.compliance": {
+        "id": "routes/webhooks.compliance",
+        "parentId": "root",
+        "file": "app/routes/webhooks.compliance.tsx",
+        "path": "webhooks/compliance",
         "config": {
           "runtime": "nodejs"
         }
@@ -116,6 +157,15 @@
           "runtime": "nodejs"
         }
       },
+      "routes/app.archive": {
+        "id": "routes/app.archive",
+        "parentId": "routes/app",
+        "file": "app/routes/app.archive.tsx",
+        "path": "archive",
+        "config": {
+          "runtime": "nodejs"
+        }
+      },
       "routes/app._index": {
         "id": "routes/app._index",
         "parentId": "routes/app",
@@ -148,17 +198,41 @@
         "id": "root",
         "file": "root.tsx"
       },
+      "routes/webhooks.customers.data_request": {
+        "id": "routes/webhooks.customers.data_request",
+        "parentId": "root",
+        "file": "routes/webhooks.customers.data_request.tsx",
+        "path": "webhooks/customers/data_request"
+      },
       "routes/webhooks.app.scopes_update": {
         "id": "routes/webhooks.app.scopes_update",
         "parentId": "root",
         "file": "routes/webhooks.app.scopes_update.tsx",
         "path": "webhooks/app/scopes_update"
       },
+      "routes/webhooks.customers.redact": {
+        "id": "routes/webhooks.customers.redact",
+        "parentId": "root",
+        "file": "routes/webhooks.customers.redact.tsx",
+        "path": "webhooks/customers/redact"
+      },
       "routes/webhooks.app.uninstalled": {
         "id": "routes/webhooks.app.uninstalled",
         "parentId": "root",
         "file": "routes/webhooks.app.uninstalled.tsx",
         "path": "webhooks/app/uninstalled"
+      },
+      "routes/webhooks.shop.redact": {
+        "id": "routes/webhooks.shop.redact",
+        "parentId": "root",
+        "file": "routes/webhooks.shop.redact.tsx",
+        "path": "webhooks/shop/redact"
+      },
+      "routes/webhooks.compliance": {
+        "id": "routes/webhooks.compliance",
+        "parentId": "root",
+        "file": "routes/webhooks.compliance.tsx",
+        "path": "webhooks/compliance"
       },
       "routes/auth.login": {
         "id": "routes/auth.login",
@@ -207,6 +281,12 @@
         "parentId": "routes/app",
         "file": "routes/app.additional.tsx",
         "path": "additional"
+      },
+      "routes/app.archive": {
+        "id": "routes/app.archive",
+        "parentId": "routes/app",
+        "file": "routes/app.archive.tsx",
+        "path": "archive"
       },
       "routes/app._index": {
         "id": "routes/app._index",

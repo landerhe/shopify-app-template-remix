@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { useFetcher } from "@remix-run/react";
+import { useFetcher, useLoaderData } from "@remix-run/react";
 import {
   Page,
   Layout,
@@ -13,17 +13,19 @@ import {
   List,
   Link,
   InlineStack,
-  Banner,
-  Divider,
-  Modal,
+  Badge,
 } from "@shopify/polaris";
 import { TitleBar, useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
+import {
+  getHomepageInventoryMetrics,
+  type HomepageInventoryMetrics,
+} from "../utils/inventory-metrics.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
-
-  return null;
+  const { admin } = await authenticate.admin(request);
+  const metrics = await getHomepageInventoryMetrics(admin);
+  return json<HomepageInventoryMetrics>(metrics);
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -31,11 +33,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
-
-  if (intent === "archivePeruzzo") {
-    const result = await archiveProductsByVendor(admin, { vendor: "Peruzzo" });
-    return json<ArchivePeruzzoActionData>({ intent, ...result });
-  }
 
   if (intent !== "generateProduct") {
     return json(
@@ -113,21 +110,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function Index() {
+  const metrics = useLoaderData<typeof loader>();
   const generateFetcher = useFetcher<typeof action>();
-  const archiveFetcher = useFetcher<typeof action>();
 
   const shopify = useAppBridge();
   const isGenerating =
     ["loading", "submitting"].includes(generateFetcher.state) &&
     generateFetcher.formMethod === "POST";
 
-  const isArchiving =
-    ["loading", "submitting"].includes(archiveFetcher.state) &&
-    archiveFetcher.formMethod === "POST";
-
   const productId =
     generateFetcher.data && "product" in generateFetcher.data
-      ? generateFetcher.data.product?.id.replace("gid://shopify/Product/", "")
+      ? (generateFetcher.data.product as { id?: string })?.id?.replace(
+          "gid://shopify/Product/",
+          ""
+        )
       : undefined;
 
   useEffect(() => {
@@ -136,32 +132,20 @@ export default function Index() {
     }
   }, [productId, shopify]);
 
-  const [confirmOpen, setConfirmOpen] = useState(false);
-
-  const archiveResult = useMemo(() => {
-    if (!archiveFetcher.data) return null;
-    if ("ok" in archiveFetcher.data) return archiveFetcher.data;
-    return null;
-  }, [archiveFetcher.data]);
-
-  useEffect(() => {
-    if (!archiveResult) return;
-    if (archiveResult.ok) shopify.toast.show("Archiving complete");
-    else shopify.toast.show("Archiving finished with errors");
-  }, [archiveResult, shopify]);
-
   const generateProduct = () =>
     generateFetcher.submit({ intent: "generateProduct" }, { method: "POST" });
 
-  const archivePeruzzo = () => {
-    setConfirmOpen(false);
-    archiveFetcher.submit({ intent: "archivePeruzzo" }, { method: "POST" });
-    shopify.toast.show("Archiving Peruzzo products…");
-  };
+  const formatCount = (count: number, hasMore: boolean) =>
+    hasMore ? `${count}+` : String(count);
+
+  const showProductData =
+    generateFetcher.data &&
+    "product" in generateFetcher.data &&
+    Boolean(generateFetcher.data.product);
 
   return (
     <Page>
-      <TitleBar title="Remix app template">
+      <TitleBar title="Inventory overview">
         <button variant="primary" onClick={generateProduct}>
           Generate a product
         </button>
@@ -170,13 +154,80 @@ export default function Index() {
         <Layout>
           <Layout.Section>
             <Card>
+              <BlockStack gap="400">
+                <InlineStack align="space-between" blockAlign="center" wrap={false}>
+                  <Text as="h2" variant="headingMd">
+                    Store status
+                  </Text>
+                  {metrics.setupComplete ? (
+                    <Badge tone="success">Set up</Badge>
+                  ) : (
+                    <Badge tone="warning">Setup needed</Badge>
+                  )}
+                </InlineStack>
+                <Text variant="bodyMd" as="p">
+                  {metrics.setupComplete
+                    ? "Your store is configured with products and locations. Use the tools below to manage inventory policies."
+                    : "Add products and configure locations in your Shopify admin to get started."}
+                </Text>
+                <InlineStack gap="600" wrap>
+                  <BlockStack gap="100">
+                    <Text as="span" variant="bodySm" tone="subdued">
+                      Products
+                    </Text>
+                    <Text as="span" variant="headingMd">
+                      {formatCount(metrics.totalProducts, metrics.hasMoreProducts)}
+                    </Text>
+                  </BlockStack>
+                  <BlockStack gap="100">
+                    <Text as="span" variant="bodySm" tone="subdued">
+                      Variants sampled
+                    </Text>
+                    <Text as="span" variant="headingMd">
+                      {formatCount(metrics.totalVariants, metrics.hasMoreVariants)}
+                    </Text>
+                  </BlockStack>
+                  <BlockStack gap="100">
+                    <Text as="span" variant="bodySm" tone="subdued">
+                      Need attention
+                    </Text>
+                    <Text as="span" variant="headingMd">
+                      {metrics.variantsWithContinuePolicy > 0 ? (
+                        <Text as="span" tone="critical">
+                          {metrics.variantsWithContinuePolicy} variants
+                        </Text>
+                      ) : (
+                        <Text as="span" tone="success">None</Text>
+                      )}
+                    </Text>
+                  </BlockStack>
+                </InlineStack>
+                <InlineStack gap="300">
+                  <Button url="/app/archive">
+                    Bulk archive by conditions
+                  </Button>
+                  {metrics.variantsWithContinuePolicy > 0 && (
+                    <>
+                      <Button url="/app/inventory-scan" variant="primary">
+                        Scan inventory policies
+                      </Button>
+                      <Button url="/app/inventory-reset" tone="critical">
+                        Reset inventory
+                      </Button>
+                    </>
+                  )}
+                </InlineStack>
+              </BlockStack>
+            </Card>
+
+            <Card>
               <BlockStack gap="500">
                 <BlockStack gap="200">
                   <Text as="h2" variant="headingMd">
-                    Congrats on creating a new Shopify app 🎉
+                    Get started with products
                   </Text>
                   <Text variant="bodyMd" as="p">
-                    This embedded app template uses{" "}
+                    This embedded app uses{" "}
                     <Link
                       url="https://shopify.dev/docs/apps/tools/app-bridge"
                       target="_blank"
@@ -184,20 +235,23 @@ export default function Index() {
                     >
                       App Bridge
                     </Link>{" "}
-                    interface examples like an{" "}
-                    <Link url="/app/additional" removeUnderline>
-                      additional page in the app nav
-                    </Link>
-                    , as well as an{" "}
+                    and{" "}
                     <Link
                       url="https://shopify.dev/docs/api/admin-graphql"
                       target="_blank"
                       removeUnderline
                     >
                       Admin GraphQL
+                    </Link>
+                    . Generate a product to try the API, or use{" "}
+                    <Link url="/app/inventory-scan" removeUnderline>
+                      Inventory scan
                     </Link>{" "}
-                    mutation demo, to provide a starting point for app
-                    development.
+                    and{" "}
+                    <Link url="/app/inventory-reset" removeUnderline>
+                      Inventory reset
+                    </Link>{" "}
+                    to manage your store.
                   </Text>
                 </BlockStack>
                 <BlockStack gap="200">
@@ -221,9 +275,7 @@ export default function Index() {
                   <Button loading={isGenerating} onClick={generateProduct}>
                     Generate a product
                   </Button>
-                  {generateFetcher.data &&
-                    "product" in generateFetcher.data &&
-                    generateFetcher.data.product && (
+                  {showProductData ? (
                     <Button
                       url={`shopify:admin/products/${productId}`}
                       target="_blank"
@@ -231,147 +283,59 @@ export default function Index() {
                     >
                       View product
                     </Button>
-                  )}
+                  ) : null}
                 </InlineStack>
-                {generateFetcher.data &&
-                  "product" in generateFetcher.data &&
-                  generateFetcher.data.product && (
-                  <>
-                    <Text as="h3" variant="headingMd">
-                      {" "}
-                      productCreate mutation
-                    </Text>
-                    <Box
-                      padding="400"
-                      background="bg-surface-active"
-                      borderWidth="025"
-                      borderRadius="200"
-                      borderColor="border"
-                      overflowX="scroll"
-                    >
-                      <pre style={{ margin: 0 }}>
-                        <code>
-                          {JSON.stringify(generateFetcher.data.product, null, 2)}
-                        </code>
-                      </pre>
-                    </Box>
-                    <Text as="h3" variant="headingMd">
-                      {" "}
-                      productVariantsBulkUpdate mutation
-                    </Text>
-                    <Box
-                      padding="400"
-                      background="bg-surface-active"
-                      borderWidth="025"
-                      borderRadius="200"
-                      borderColor="border"
-                      overflowX="scroll"
-                    >
-                      <pre style={{ margin: 0 }}>
-                        <code>
-                          {JSON.stringify(generateFetcher.data.variant, null, 2)}
-                        </code>
-                      </pre>
-                    </Box>
-                  </>
-                )}
-              </BlockStack>
-            </Card>
-
-            <Card>
-              <BlockStack gap="400">
-                {archiveResult && archiveResult.ok && (
-                  <Banner title="Done" tone="success">
-                    <Text as="p" variant="bodyMd">
-                      Archived {archiveResult.archived} product
-                      {archiveResult.archived === 1 ? "" : "s"} (vendor:{" "}
-                      <Text as="span" fontWeight="semibold">
-                        Peruzzo
-                      </Text>
-                      ).
-                    </Text>
-                  </Banner>
-                )}
-
-                {archiveResult && !archiveResult.ok && (
-                  <Banner title="Some products could not be archived" tone="critical">
-                    <Text as="p" variant="bodyMd">
-                      The job finished, but Shopify returned errors for some
-                      products. Review the sample errors below.
-                    </Text>
-                  </Banner>
-                )}
-
-                <Text as="h2" variant="headingMd">
-                  Archive products by vendor
-                </Text>
-
-                <Text as="p" variant="bodyMd">
-                  This will archive every product where vendor is{" "}
-                  <Text as="span" fontWeight="semibold">
-                    Peruzzo
-                  </Text>
-                  .
-                </Text>
-
-                <Banner tone="warning" title="Be careful">
-                  <List>
-                    <List.Item>
-                      Archiving changes product visibility and sales channels.
-                    </List.Item>
-                    <List.Item>
-                      For stores with lots of matching products, this can take a
-                      while and may hit Shopify API limits.
-                    </List.Item>
-                  </List>
-                </Banner>
-
-                <InlineStack gap="300" align="end">
-                  <Button
-                    tone="critical"
-                    variant="primary"
-                    loading={isArchiving}
-                    onClick={() => setConfirmOpen(true)}
-                  >
-                    Archive Peruzzo products
-                  </Button>
-                </InlineStack>
-
-                {archiveResult && (
-                  <>
-                    <Divider />
-                    <Text as="h3" variant="headingSm">
-                      Summary
-                    </Text>
-                    <List type="bullet">
-                      <List.Item>Products scanned: {archiveResult.scanned}</List.Item>
-                      <List.Item>Archived: {archiveResult.archived}</List.Item>
-                      <List.Item>
-                        Already archived: {archiveResult.alreadyArchived}
-                      </List.Item>
-                      <List.Item>
-                        Shopify user errors: {archiveResult.userErrors}
-                      </List.Item>
-                    </List>
-
-                    {archiveResult.sampleErrors.length > 0 && (
-                      <>
-                        <Divider />
-                        <Text as="h3" variant="headingSm">
-                          Sample errors
-                        </Text>
-                        <List type="bullet">
-                          {archiveResult.sampleErrors.slice(0, 10).map((e, idx) => (
-                            <List.Item key={`${e.scope}-${idx}`}>
-                              {e.scope}: {e.message}
-                              {e.field?.length ? ` (field: ${e.field.join(".")})` : ""}
-                            </List.Item>
-                          ))}
-                        </List>
-                      </>
-                    )}
-                  </>
-                )}
+                {showProductData &&
+                generateFetcher.data &&
+                "product" in generateFetcher.data
+                  ? (() => {
+                      const data = generateFetcher.data as GenerateProductActionData;
+                      const productJson = JSON.stringify(
+                        data.product ?? {},
+                        null,
+                        2
+                      );
+                      const variantJson = JSON.stringify(
+                        data.variant ?? {},
+                        null,
+                        2
+                      );
+                      return (
+                        <>
+                          <Text as="h3" variant="headingMd">
+                            productCreate mutation
+                          </Text>
+                          <Box
+                            padding="400"
+                            background="bg-surface-active"
+                            borderWidth="025"
+                            borderRadius="200"
+                            borderColor="border"
+                            overflowX="scroll"
+                          >
+                            <pre style={{ margin: 0 }}>
+                              <code>{productJson}</code>
+                            </pre>
+                          </Box>
+                          <Text as="h3" variant="headingMd">
+                            productVariantsBulkUpdate mutation
+                          </Text>
+                          <Box
+                            padding="400"
+                            background="bg-surface-active"
+                            borderWidth="025"
+                            borderRadius="200"
+                            borderColor="border"
+                            overflowX="scroll"
+                          >
+                            <pre style={{ margin: 0 }}>
+                              <code>{variantJson}</code>
+                            </pre>
+                          </Box>
+                        </>
+                      );
+                    })()
+                  : null}
               </BlockStack>
             </Card>
           </Layout.Section>
@@ -479,33 +443,6 @@ export default function Index() {
           </Layout.Section>
         </Layout>
       </BlockStack>
-
-      <Modal
-        open={confirmOpen}
-        onClose={() => setConfirmOpen(false)}
-        title="Archive all Peruzzo products?"
-        primaryAction={{
-          content: "Yes, archive them",
-          destructive: true,
-          onAction: archivePeruzzo,
-          loading: isArchiving,
-        }}
-        secondaryActions={[
-          {
-            content: "Cancel",
-            onAction: () => setConfirmOpen(false),
-            disabled: isArchiving,
-          },
-        ]}
-      >
-        <Modal.Section>
-          <Text as="p" variant="bodyMd">
-            This will archive every product with vendor “Peruzzo”. You can
-            unarchive later, but this action may impact storefront visibility
-            immediately.
-          </Text>
-        </Modal.Section>
-      </Modal>
     </Page>
   );
 }
@@ -516,112 +453,10 @@ type GenerateProductActionData = {
   variant: unknown;
 };
 
-type ArchivePeruzzoActionData = ArchivePeruzzoResult & {
-  intent: "archivePeruzzo";
-};
-
 type ErrorActionData = {
   intent: "error";
   message: string;
 };
-
-type ArchivePeruzzoResult = {
-  ok: boolean;
-  scanned: number;
-  archived: number;
-  alreadyArchived: number;
-  userErrors: number;
-  sampleErrors: Array<{
-    scope: string;
-    message: string;
-    field?: string[];
-  }>;
-};
-
-async function archiveProductsByVendor(
-  admin: { graphql: Function },
-  { vendor }: { vendor: string },
-): Promise<ArchivePeruzzoResult> {
-  const result: ArchivePeruzzoResult = {
-    ok: true,
-    scanned: 0,
-    archived: 0,
-    alreadyArchived: 0,
-    userErrors: 0,
-    sampleErrors: [],
-  };
-
-  const queryString = `vendor:${vendor}`;
-  let after: string | null = null;
-
-  while (true) {
-    const data = await graphqlJson<{
-      products: {
-        nodes: Array<{ id: string; status: string }>;
-        pageInfo: { hasNextPage: boolean; endCursor?: string | null };
-      };
-    }>(
-      admin,
-      `#graphql
-        query ProductsByVendor($after: String, $query: String!) {
-          products(first: 250, after: $after, query: $query) {
-            nodes { id status }
-            pageInfo { hasNextPage endCursor }
-          }
-        }`,
-      { after, query: queryString },
-    );
-
-    for (const p of data.products.nodes) {
-      result.scanned += 1;
-
-      if (p.status === "ARCHIVED") {
-        result.alreadyArchived += 1;
-        continue;
-      }
-
-      const res = await graphqlJson<{
-        productUpdate: {
-          product?: { id: string; status: string } | null;
-          userErrors: Array<{ message: string; field?: string[] | null }>;
-        };
-      }>(
-        admin,
-        `#graphql
-          mutation ArchiveProduct($id: ID!) {
-            productUpdate(input: { id: $id, status: ARCHIVED }) {
-              product { id status }
-              userErrors { message field }
-            }
-          }`,
-        { id: p.id },
-      );
-
-      const errors = res.productUpdate.userErrors || [];
-      if (errors.length > 0) {
-        result.ok = false;
-        result.userErrors += errors.length;
-        for (const e of errors) {
-          if (result.sampleErrors.length < 25) {
-            result.sampleErrors.push({
-              scope: "productUpdate",
-              message: e.message,
-              field: e.field || undefined,
-            });
-          }
-        }
-        continue;
-      }
-
-      result.archived += 1;
-    }
-
-    if (!data.products.pageInfo.hasNextPage) break;
-    after = data.products.pageInfo.endCursor || null;
-  }
-
-  return result;
-}
 
 async function graphqlJson<T>(
   admin: { graphql: Function },

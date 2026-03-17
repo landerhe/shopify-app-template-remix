@@ -21,12 +21,21 @@ export default function App() {
   return (
     <AppProvider isEmbeddedApp apiKey={apiKey}>
       <NavMenu>
-        <Link to="/app" rel="home">
+        <Link to="/app" rel="home" prefetch="viewport">
           Home
         </Link>
-        <Link to="/app/additional">Additional page</Link>
-        <Link to="/app/inventory-reset">Inventory reset</Link>
-        <Link to="/app/inventory-scan">Inventory scan</Link>
+        <Link to="/app/archive" prefetch="intent">
+          Bulk archive
+        </Link>
+        <Link to="/app/additional" prefetch="intent">
+          Additional page
+        </Link>
+        <Link to="/app/inventory-reset" prefetch="intent">
+          Inventory reset
+        </Link>
+        <Link to="/app/inventory-scan" prefetch="intent">
+          Inventory scan
+        </Link>
       </NavMenu>
       <Outlet />
     </AppProvider>
