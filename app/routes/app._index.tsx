@@ -1,7 +1,7 @@
-import { useEffect } from "react";
+import { useMemo, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { useFetcher, useLoaderData } from "@remix-run/react";
+import { useLoaderData, useFetcher } from "@remix-run/react";
 import {
   Page,
   Layout,
@@ -9,11 +9,11 @@ import {
   Card,
   Button,
   BlockStack,
-  Box,
-  List,
-  Link,
   InlineStack,
-  Badge,
+  Banner,
+  Divider,
+  List,
+  Modal,
 } from "@shopify/polaris";
 import { TitleBar, useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
@@ -21,6 +21,10 @@ import {
   getHomepageInventoryMetrics,
   type HomepageInventoryMetrics,
 } from "../utils/inventory-metrics.server";
+import {
+  scanInventoryPolicies,
+  type InventoryPolicyScanResult,
+} from "../utils/inventory-scan.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
@@ -30,126 +34,57 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
-
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
 
-  if (intent !== "generateProduct") {
-    return json(
-      { intent: "error", message: "Invalid intent" } satisfies ErrorActionData,
-      { status: 400 },
+  if (intent !== "scan") {
+    return json<InventoryPolicyScanResult>(
+      {
+        ok: false,
+        productsScanned: 0,
+        variantsScanned: 0,
+        productsWithContinue: 0,
+        variantsWithContinue: 0,
+        sampleOffenders: [],
+      },
+      { status: 400 }
     );
   }
 
-  const color = ["Red", "Orange", "Yellow", "Green"][
-    Math.floor(Math.random() * 4)
-  ];
-  const response = await admin.graphql(
-    `#graphql
-      mutation populateProduct($product: ProductCreateInput!) {
-        productCreate(product: $product) {
-          product {
-            id
-            title
-            handle
-            status
-            variants(first: 10) {
-              edges {
-                node {
-                  id
-                  price
-                  barcode
-                  createdAt
-                }
-              }
-            }
-          }
-        }
-      }`,
-    {
-      variables: {
-        product: {
-          title: `${color} Snowboard`,
-        },
-      },
-    },
-  );
-  const responseJson = await response.json();
-
-  const product = responseJson.data!.productCreate!.product!;
-  const variantId = product.variants.edges[0]!.node!.id!;
-
-  const variantResponse = await admin.graphql(
-    `#graphql
-    mutation shopifyRemixTemplateUpdateVariant($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-      productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-        productVariants {
-          id
-          price
-          barcode
-          createdAt
-        }
-      }
-    }`,
-    {
-      variables: {
-        productId: product.id,
-        variants: [{ id: variantId, price: "100.00" }],
-      },
-    },
-  );
-
-  const variantResponseJson = await variantResponse.json();
-
-  return json<GenerateProductActionData>({
-    intent,
-    product: responseJson!.data!.productCreate!.product,
-    variant:
-      variantResponseJson!.data!.productVariantsBulkUpdate!.productVariants,
-  });
+  const result = await scanInventoryPolicies(admin);
+  return json<InventoryPolicyScanResult>(result);
 };
 
 export default function Index() {
   const metrics = useLoaderData<typeof loader>();
-  const generateFetcher = useFetcher<typeof action>();
-
   const shopify = useAppBridge();
-  const isGenerating =
-    ["loading", "submitting"].includes(generateFetcher.state) &&
-    generateFetcher.formMethod === "POST";
+  const scanFetcher = useFetcher<typeof action>();
+  const [confirmScanOpen, setConfirmScanOpen] = useState(false);
 
-  const productId =
-    generateFetcher.data && "product" in generateFetcher.data
-      ? (generateFetcher.data.product as { id?: string })?.id?.replace(
-          "gid://shopify/Product/",
-          ""
-        )
-      : undefined;
+  const isScanRunning =
+    ["loading", "submitting"].includes(scanFetcher.state) &&
+    scanFetcher.formMethod === "POST";
 
-  useEffect(() => {
-    if (productId) {
-      shopify.toast.show("Product created");
-    }
-  }, [productId, shopify]);
+  const scanResult = scanFetcher.data;
+  const hasScanResult = Boolean(scanResult && "productsScanned" in scanResult);
 
-  const generateProduct = () =>
-    generateFetcher.submit({ intent: "generateProduct" }, { method: "POST" });
+  const offenders = useMemo(
+    () => (scanResult?.sampleOffenders || []).slice(0, 25),
+    [scanResult]
+  );
 
   const formatCount = (count: number, hasMore: boolean) =>
     hasMore ? `${count}+` : String(count);
 
-  const showProductData =
-    generateFetcher.data &&
-    "product" in generateFetcher.data &&
-    Boolean(generateFetcher.data.product);
+  const onScan = () => {
+    setConfirmScanOpen(false);
+    scanFetcher.submit({ intent: "scan" }, { method: "post" });
+    shopify.toast.show("Scanning inventory policies…");
+  };
 
   return (
     <Page>
-      <TitleBar title="Inventory overview">
-        <button variant="primary" onClick={generateProduct}>
-          Generate a product
-        </button>
-      </TitleBar>
+      <TitleBar title="Inventory overview" />
       <BlockStack gap="500">
         <Layout>
           <Layout.Section>
@@ -159,11 +94,6 @@ export default function Index() {
                   <Text as="h2" variant="headingMd">
                     Store status
                   </Text>
-                  {metrics.setupComplete ? (
-                    <Badge tone="success">Set up</Badge>
-                  ) : (
-                    <Badge tone="warning">Setup needed</Badge>
-                  )}
                 </InlineStack>
                 <Text variant="bodyMd" as="p">
                   {metrics.setupComplete
@@ -204,273 +134,116 @@ export default function Index() {
                 </InlineStack>
                 <InlineStack gap="300">
                   <Button url="/app/archive">
-                    Bulk archive by conditions
+                    Bulk archive / Set active
                   </Button>
-                  {metrics.variantsWithContinuePolicy > 0 && (
-                    <>
-                      <Button url="/app/inventory-scan" variant="primary">
-                        Scan inventory policies
-                      </Button>
-                      <Button url="/app/inventory-reset" tone="critical">
-                        Reset inventory
-                      </Button>
-                    </>
-                  )}
+                  <Button
+                    variant="primary"
+                    loading={isScanRunning}
+                    onClick={() => setConfirmScanOpen(true)}
+                  >
+                    Scan inventory policies
+                  </Button>
+                  <Button url="/app/inventory-reset" tone="critical">
+                    Reset inventory
+                  </Button>
                 </InlineStack>
               </BlockStack>
             </Card>
 
-            <Card>
-              <BlockStack gap="500">
-                <BlockStack gap="200">
-                  <Text as="h2" variant="headingMd">
-                    Get started with products
+            {hasScanResult && scanResult?.ok && (
+              <Banner title="All set" tone="success">
+                <Text as="p" variant="bodyMd">
+                  Every variant is set to{" "}
+                  <Text as="span" fontWeight="semibold">
+                    DENY
+                  </Text>{" "}
+                  (does not continue selling when out of stock).
+                </Text>
+              </Banner>
+            )}
+
+            {hasScanResult && scanResult && !scanResult.ok && (
+              <Banner title="Found variants that continue selling" tone="critical">
+                <Text as="p" variant="bodyMd">
+                  Some variants are set to{" "}
+                  <Text as="span" fontWeight="semibold">
+                    CONTINUE
                   </Text>
-                  <Text variant="bodyMd" as="p">
-                    This embedded app uses{" "}
-                    <Link
-                      url="https://shopify.dev/docs/apps/tools/app-bridge"
-                      target="_blank"
-                      removeUnderline
-                    >
-                      App Bridge
-                    </Link>{" "}
-                    and{" "}
-                    <Link
-                      url="https://shopify.dev/docs/api/admin-graphql"
-                      target="_blank"
-                      removeUnderline
-                    >
-                      Admin GraphQL
-                    </Link>
-                    . Generate a product to try the API, or use{" "}
-                    <Link url="/app/inventory-scan" removeUnderline>
-                      Inventory scan
-                    </Link>{" "}
-                    and{" "}
-                    <Link url="/app/inventory-reset" removeUnderline>
-                      Inventory reset
-                    </Link>{" "}
-                    to manage your store.
-                  </Text>
-                </BlockStack>
-                <BlockStack gap="200">
-                  <Text as="h3" variant="headingMd">
-                    Get started with products
-                  </Text>
-                  <Text as="p" variant="bodyMd">
-                    Generate a product with GraphQL and get the JSON output for
-                    that product. Learn more about the{" "}
-                    <Link
-                      url="https://shopify.dev/docs/api/admin-graphql/latest/mutations/productCreate"
-                      target="_blank"
-                      removeUnderline
-                    >
-                      productCreate
-                    </Link>{" "}
-                    mutation in our API references.
-                  </Text>
-                </BlockStack>
-                <InlineStack gap="300">
-                  <Button loading={isGenerating} onClick={generateProduct}>
-                    Generate a product
-                  </Button>
-                  {showProductData ? (
-                    <Button
-                      url={`shopify:admin/products/${productId}`}
-                      target="_blank"
-                      variant="plain"
-                    >
-                      View product
-                    </Button>
-                  ) : null}
-                </InlineStack>
-                {showProductData &&
-                generateFetcher.data &&
-                "product" in generateFetcher.data
-                  ? (() => {
-                      const data = generateFetcher.data as GenerateProductActionData;
-                      const productJson = JSON.stringify(
-                        data.product ?? {},
-                        null,
-                        2
-                      );
-                      const variantJson = JSON.stringify(
-                        data.variant ?? {},
-                        null,
-                        2
-                      );
-                      return (
-                        <>
-                          <Text as="h3" variant="headingMd">
-                            productCreate mutation
-                          </Text>
-                          <Box
-                            padding="400"
-                            background="bg-surface-active"
-                            borderWidth="025"
-                            borderRadius="200"
-                            borderColor="border"
-                            overflowX="scroll"
-                          >
-                            <pre style={{ margin: 0 }}>
-                              <code>{productJson}</code>
-                            </pre>
-                          </Box>
-                          <Text as="h3" variant="headingMd">
-                            productVariantsBulkUpdate mutation
-                          </Text>
-                          <Box
-                            padding="400"
-                            background="bg-surface-active"
-                            borderWidth="025"
-                            borderRadius="200"
-                            borderColor="border"
-                            overflowX="scroll"
-                          >
-                            <pre style={{ margin: 0 }}>
-                              <code>{variantJson}</code>
-                            </pre>
-                          </Box>
-                        </>
-                      );
-                    })()
-                  : null}
-              </BlockStack>
-            </Card>
-          </Layout.Section>
-          <Layout.Section variant="oneThird">
-            <BlockStack gap="500">
+                  . Run the inventory reset to switch them to DENY.
+                </Text>
+              </Banner>
+            )}
+
+            {hasScanResult && scanResult && (
               <Card>
-                <BlockStack gap="200">
+                <BlockStack gap="300">
                   <Text as="h2" variant="headingMd">
-                    App template specs
+                    Scan summary
                   </Text>
-                  <BlockStack gap="200">
-                    <InlineStack align="space-between">
-                      <Text as="span" variant="bodyMd">
-                        Framework
-                      </Text>
-                      <Link
-                        url="https://remix.run"
-                        target="_blank"
-                        removeUnderline
-                      >
-                        Remix
-                      </Link>
-                    </InlineStack>
-                    <InlineStack align="space-between">
-                      <Text as="span" variant="bodyMd">
-                        Database
-                      </Text>
-                      <Link
-                        url="https://www.prisma.io/"
-                        target="_blank"
-                        removeUnderline
-                      >
-                        Prisma
-                      </Link>
-                    </InlineStack>
-                    <InlineStack align="space-between">
-                      <Text as="span" variant="bodyMd">
-                        Interface
-                      </Text>
-                      <span>
-                        <Link
-                          url="https://polaris.shopify.com"
-                          target="_blank"
-                          removeUnderline
-                        >
-                          Polaris
-                        </Link>
-                        {", "}
-                        <Link
-                          url="https://shopify.dev/docs/apps/tools/app-bridge"
-                          target="_blank"
-                          removeUnderline
-                        >
-                          App Bridge
-                        </Link>
-                      </span>
-                    </InlineStack>
-                    <InlineStack align="space-between">
-                      <Text as="span" variant="bodyMd">
-                        API
-                      </Text>
-                      <Link
-                        url="https://shopify.dev/docs/api/admin-graphql"
-                        target="_blank"
-                        removeUnderline
-                      >
-                        GraphQL API
-                      </Link>
-                    </InlineStack>
-                  </BlockStack>
-                </BlockStack>
-              </Card>
-              <Card>
-                <BlockStack gap="200">
-                  <Text as="h2" variant="headingMd">
-                    Next steps
-                  </Text>
-                  <List>
+                  <Divider />
+                  <List type="bullet">
                     <List.Item>
-                      Build an{" "}
-                      <Link
-                        url="https://shopify.dev/docs/apps/getting-started/build-app-example"
-                        target="_blank"
-                        removeUnderline
-                      >
-                        {" "}
-                        example app
-                      </Link>{" "}
-                      to get started
+                      Products scanned: {scanResult.productsScanned}
                     </List.Item>
                     <List.Item>
-                      Explore Shopify’s API with{" "}
-                      <Link
-                        url="https://shopify.dev/docs/apps/tools/graphiql-admin-api"
-                        target="_blank"
-                        removeUnderline
-                      >
-                        GraphiQL
-                      </Link>
+                      Variants scanned: {scanResult.variantsScanned}
+                    </List.Item>
+                    <List.Item>
+                      Products with CONTINUE: {scanResult.productsWithContinue}
+                    </List.Item>
+                    <List.Item>
+                      Variants with CONTINUE: {scanResult.variantsWithContinue}
                     </List.Item>
                   </List>
+
+                  {offenders.length > 0 && (
+                    <>
+                      <Divider />
+                      <Text as="h3" variant="headingSm">
+                        Sample offenders
+                      </Text>
+                      <List type="bullet">
+                        {offenders.map((o, idx) => (
+                          <List.Item key={`${o.productHandle}-${idx}`}>
+                            {o.productTitle} — {o.variantTitle}
+                            {o.sku ? ` (SKU: ${o.sku})` : ""}
+                          </List.Item>
+                        ))}
+                      </List>
+                    </>
+                  )}
                 </BlockStack>
               </Card>
-            </BlockStack>
+            )}
           </Layout.Section>
         </Layout>
       </BlockStack>
+
+      <Modal
+        open={confirmScanOpen}
+        onClose={() => setConfirmScanOpen(false)}
+        title="Scan all products?"
+        primaryAction={{
+          content: "Scan now",
+          onAction: onScan,
+          loading: isScanRunning,
+        }}
+        secondaryActions={[
+          {
+            content: "Cancel",
+            onAction: () => setConfirmScanOpen(false),
+            disabled: isScanRunning,
+          },
+        ]}
+      >
+        <Modal.Section>
+          <Text as="p" variant="bodyMd">
+            This scans every variant in the store and reports any with
+            &quot;Continue selling when out of stock&quot; turned on. It may
+            take a while on large catalogs.
+          </Text>
+        </Modal.Section>
+      </Modal>
     </Page>
   );
-}
-
-type GenerateProductActionData = {
-  intent: "generateProduct";
-  product: unknown;
-  variant: unknown;
-};
-
-type ErrorActionData = {
-  intent: "error";
-  message: string;
-};
-
-async function graphqlJson<T>(
-  admin: { graphql: Function },
-  query: string,
-  variables: Record<string, unknown>,
-) {
-  const response = await admin.graphql(query, { variables });
-  const body = (await response.json()) as { data?: T; errors?: unknown };
-
-  if (!body.data) {
-    throw new Error(
-      `Shopify GraphQL request failed: ${JSON.stringify(body.errors || body)}`,
-    );
-  }
-
-  return body.data;
 }

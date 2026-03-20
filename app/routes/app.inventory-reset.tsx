@@ -1,95 +1,159 @@
-import { useMemo, useState } from "react";
-import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { json } from "@remix-run/node";
-import { useFetcher } from "@remix-run/react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { LoaderFunctionArgs } from "@remix-run/node";
 import {
   BlockStack,
   Button,
   Card,
+  Checkbox,
   Divider,
+  FormLayout,
   InlineStack,
   Layout,
   Modal,
   Page,
+  ProgressBar,
   Text,
+  TextField,
   Banner,
   List,
 } from "@shopify/polaris";
 import { TitleBar, useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
+import type {
+  InventoryResetProgressUpdate,
+  InventoryResetResult,
+} from "../utils/inventory-reset.server";
 
-type InventoryResetResult = {
-  ok: boolean;
-  locations: number;
-  variantsScanned: number;
-  inventoryAdjustCalls: number;
-  inventoryAdjustUserErrors: number;
-  inventoryAdjustIgnoredNotStockedErrors: number;
-  policyUpdateCalls: number;
-  policyUpdatedVariants: number;
-  policyUpdateUserErrors: number;
-  sampleErrors: Array<{ scope: string; message: string; code?: string }>;
-};
+const PROGRESS_THROTTLE_MS = 100;
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
   return null;
 };
 
-export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
-  const formData = await request.formData();
-  const intent = String(formData.get("intent") || "");
-
-  if (intent !== "run") {
-    return json<InventoryResetResult>(
-      {
-        ok: false,
-        locations: 0,
-        variantsScanned: 0,
-        inventoryAdjustCalls: 0,
-        inventoryAdjustUserErrors: 0,
-        inventoryAdjustIgnoredNotStockedErrors: 0,
-        policyUpdateCalls: 0,
-        policyUpdatedVariants: 0,
-        policyUpdateUserErrors: 0,
-        sampleErrors: [{ scope: "request", message: "Invalid intent" }],
-      },
-      { status: 400 },
-    );
-  }
-
-  const locations = await getAllLocationIds(admin);
-  const result = await runInventoryReset({
-    admin,
-    locationIds: locations,
-  });
-
-  return json<InventoryResetResult>(result);
-};
-
 export default function InventoryResetRoute() {
   const shopify = useAppBridge();
-  const fetcher = useFetcher<typeof action>();
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [includeAppLocations, setIncludeAppLocations] = useState(false);
+  const [resetAll, setResetAll] = useState(true);
+  const [vendor, setVendor] = useState("");
+  const [tags, setTags] = useState("");
+  const [titleContains, setTitleContains] = useState("");
+  const [isRunning, setIsRunning] = useState(false);
+  const [result, setResult] = useState<InventoryResetResult | null>(null);
+  const [hasError, setHasError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<InventoryResetProgressUpdate | null>(
+    null
+  );
+  const lastProgressUpdate = useRef(0);
+  const pendingProgress = useRef<InventoryResetProgressUpdate | null>(null);
 
-  const isRunning =
-    ["loading", "submitting"].includes(fetcher.state) &&
-    fetcher.formMethod === "POST";
+  const flushProgress = useCallback(() => {
+    if (pendingProgress.current) {
+      setProgress(pendingProgress.current);
+      pendingProgress.current = null;
+    }
+  }, []);
 
-  const result = fetcher.data;
-  const hasResult = Boolean(result);
+  const errorList = result?.sampleErrors?.slice(0, 10) ?? [];
 
-  const errorList = useMemo(() => {
-    if (!result?.sampleErrors?.length) return [];
-    return result.sampleErrors.slice(0, 10);
-  }, [result]);
+  const hasConditions =
+    resetAll ||
+    Boolean(vendor.trim() || tags.trim() || titleContains.trim());
 
-  const onRun = () => {
+  const onRun = useCallback(async () => {
     setConfirmOpen(false);
-    fetcher.submit({ intent: "run" }, { method: "post" });
+    setHasError(null);
+    setResult(null);
+    setProgress(null);
+    setIsRunning(true);
     shopify.toast.show("Running inventory reset…");
-  };
+
+    const formData = new FormData();
+    formData.set("intent", "run");
+    formData.set("includeAppLocations", String(includeAppLocations));
+    formData.set("resetAll", String(resetAll));
+    formData.set("vendor", vendor);
+    formData.set("tags", tags);
+    formData.set("titleContains", titleContains);
+
+    try {
+      const res = await fetch("/app/api/inventory-reset-progress", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        setHasError(
+          (errData as { message?: string }).message ??
+            "Inventory reset request failed"
+        );
+        return;
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) {
+        setHasError("Streaming not supported");
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const update = JSON.parse(line) as InventoryResetProgressUpdate & {
+              error?: string;
+              message?: string;
+            };
+            if (update.error) {
+              setHasError(update.message ?? update.error);
+              return;
+            }
+
+            const now = Date.now();
+            pendingProgress.current = update;
+            if (now - lastProgressUpdate.current >= PROGRESS_THROTTLE_MS) {
+              lastProgressUpdate.current = now;
+              setProgress(update);
+              pendingProgress.current = null;
+            }
+
+            if (update.done && update.result) {
+              setResult(update.result);
+              if (update.result.ok)
+                shopify.toast.show("Inventory reset complete");
+              else shopify.toast.show("Inventory reset finished with errors");
+            }
+          } catch {
+            // Skip malformed lines
+          }
+        }
+      }
+
+      flushProgress();
+    } catch (err) {
+      setHasError(err instanceof Error ? err.message : "Inventory reset failed");
+    } finally {
+      setIsRunning(false);
+    }
+  }, [includeAppLocations, resetAll, vendor, tags, titleContains, shopify, flushProgress]);
+
+  useEffect(() => {
+    if (!isRunning && pendingProgress.current) {
+      flushProgress();
+    }
+  }, [isRunning, flushProgress]);
 
   return (
     <Page backAction={{ content: "Home", url: "/app" }}>
@@ -97,7 +161,32 @@ export default function InventoryResetRoute() {
       <Layout>
         <Layout.Section>
           <BlockStack gap="500">
-            {hasResult && result.ok && (
+            {hasError && (
+              <Banner
+                title="Error"
+                tone="critical"
+                onDismiss={() => setHasError(null)}
+              >
+                <Text as="p" variant="bodyMd">
+                  {hasError}
+                </Text>
+              </Banner>
+            )}
+
+            {isRunning && progress && (
+              <Card>
+                <BlockStack gap="300">
+                  <ProgressBar progress={75} size="small" tone="primary" />
+                  <Text as="p" variant="bodyMd">
+                    {progress.currentTitle
+                      ? `Processing: ${progress.currentTitle} — ${progress.variantsScanned} variants scanned, ${progress.policyUpdatedVariants} policy updates`
+                      : `Resetting inventory… ${progress.variantsScanned} variants scanned`}
+                  </Text>
+                </BlockStack>
+              </Card>
+            )}
+
+            {result?.ok && (
               <Banner title="Done" tone="success">
                 <Text as="p" variant="bodyMd">
                   Updated inventory across all locations and ensured variants
@@ -105,7 +194,7 @@ export default function InventoryResetRoute() {
                 </Text>
               </Banner>
             )}
-            {hasResult && !result.ok && (
+            {result && !result.ok && (
               <Banner title="Some updates failed" tone="critical">
                 <Text as="p" variant="bodyMd">
                   The job finished, but Shopify returned errors for some items.
@@ -117,20 +206,68 @@ export default function InventoryResetRoute() {
             <Card>
               <BlockStack gap="400">
                 <Text as="h2" variant="headingMd">
-                  One-click action
+                  Set inventory to 0
                 </Text>
                 <Text as="p" variant="bodyMd">
                   This will set <Text as="span" fontWeight="semibold">available</Text>{" "}
                   inventory to <Text as="span" fontWeight="semibold">0</Text>{" "}
-                  for every variant at every location, and set “Continue selling
+                  for matching variants at every location, and set “Continue selling
                   when out of stock” to <Text as="span" fontWeight="semibold">off</Text>{" "}
                   (inventory policy <Text as="span" fontWeight="semibold">DENY</Text>).
                 </Text>
+
+                <FormLayout>
+                  <Checkbox
+                    label="Reset all products"
+                    checked={resetAll}
+                    onChange={setResetAll}
+                    disabled={isRunning}
+                    helpText="When checked, all products in the store will be reset. When unchecked, use the conditions below to filter."
+                  />
+                  <TextField
+                    label="Vendor"
+                    value={vendor}
+                    onChange={setVendor}
+                    placeholder="e.g. Acme"
+                    autoComplete="off"
+                    disabled={isRunning || resetAll}
+                  />
+                  <TextField
+                    label="Tags"
+                    value={tags}
+                    onChange={setTags}
+                    placeholder="e.g. sale, clearance"
+                    autoComplete="off"
+                    disabled={isRunning || resetAll}
+                    helpText="Comma-separated list of tags. Products with any listed tag will match."
+                  />
+                  <TextField
+                    label="Title contains"
+                    value={titleContains}
+                    onChange={setTitleContains}
+                    placeholder='e.g. hoodie or "green hoodie"'
+                    autoComplete="off"
+                    disabled={isRunning || resetAll}
+                    helpText="Words or phrase to search in product title."
+                  />
+                </FormLayout>
+
+                <Checkbox
+                  label="Include app/fulfillment service locations"
+                  checked={includeAppLocations}
+                  onChange={setIncludeAppLocations}
+                  disabled={isRunning}
+                  helpText="When checked, inventory at locations managed by fulfillment apps (e.g. 3PL, dropshipping) will also be set to 0. Leave unchecked to only update your own warehouse and retail locations."
+                />
+
                 <Banner tone="warning" title="Be careful">
                   <List>
                     <List.Item>
-                      This affects <Text as="span" fontWeight="semibold">all</Text>{" "}
-                      products in the store.
+                      {resetAll ? (
+                        <>This affects <Text as="span" fontWeight="semibold">all</Text> products in the store.</>
+                      ) : (
+                        <>This affects only products matching your conditions.</>
+                      )}
                     </List.Item>
                     <List.Item>
                       For stores with lots of products, this can take several
@@ -140,22 +277,25 @@ export default function InventoryResetRoute() {
                 </Banner>
 
                 <InlineStack gap="300" align="end">
-                  <Button url="/app/inventory-scan" variant="plain">
+                  <Button url="/app" variant="plain">
                     Scan inventory policies
                   </Button>
                   <Button
                     tone="critical"
                     variant="primary"
                     loading={isRunning}
+                    disabled={!hasConditions}
                     onClick={() => setConfirmOpen(true)}
                   >
-                    Set all inventory to 0
+                    {resetAll
+                      ? "Set all inventory to 0"
+                      : "Set matching inventory to 0"}
                   </Button>
                 </InlineStack>
               </BlockStack>
             </Card>
 
-            {hasResult && (
+            {result && (
               <Card>
                 <BlockStack gap="300">
                   <Text as="h2" variant="headingMd">
@@ -211,9 +351,15 @@ export default function InventoryResetRoute() {
       <Modal
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
-        title="Confirm inventory reset"
+        title={
+          resetAll
+            ? "Confirm inventory reset"
+            : "Confirm reset for matching products"
+        }
         primaryAction={{
-          content: "Yes, set all inventory to 0",
+          content: resetAll
+            ? "Yes, set all inventory to 0"
+            : "Yes, set matching inventory to 0",
           destructive: true,
           onAction: onRun,
           loading: isRunning,
@@ -229,7 +375,7 @@ export default function InventoryResetRoute() {
         <Modal.Section>
           <BlockStack gap="200">
             <Text as="p" variant="bodyMd">
-              This will update every variant in the store. This can’t be undone
+              {resetAll ? "This will update every variant in the store." : "This will update variants of products matching your conditions."} This can’t be undone
               automatically.
             </Text>
           </BlockStack>
@@ -238,334 +384,5 @@ export default function InventoryResetRoute() {
     </Page>
   );
 }
-
-async function getAllLocationIds(admin: { graphql: Function }) {
-  const locationIds: string[] = [];
-  let after: string | null = null;
-
-  while (true) {
-    const data = await graphqlJson<{
-      locations: {
-        nodes: Array<{ id: string; name: string }>;
-        pageInfo: { hasNextPage: boolean; endCursor?: string | null };
-      };
-    }>(
-      admin,
-      `#graphql
-        query InventoryResetLocations($after: String) {
-          locations(first: 250, after: $after) {
-            nodes { id name }
-            pageInfo { hasNextPage endCursor }
-          }
-        }`,
-      { after },
-    );
-
-    for (const loc of data.locations.nodes) locationIds.push(loc.id);
-    if (!data.locations.pageInfo.hasNextPage) break;
-    after = data.locations.pageInfo.endCursor || null;
-  }
-
-  return locationIds;
-}
-
-async function runInventoryReset({
-  admin,
-  locationIds,
-}: {
-  admin: { graphql: Function };
-  locationIds: string[];
-}): Promise<InventoryResetResult> {
-  const result: InventoryResetResult = {
-    ok: true,
-    locations: locationIds.length,
-    variantsScanned: 0,
-    inventoryAdjustCalls: 0,
-    inventoryAdjustUserErrors: 0,
-    inventoryAdjustIgnoredNotStockedErrors: 0,
-    policyUpdateCalls: 0,
-    policyUpdatedVariants: 0,
-    policyUpdateUserErrors: 0,
-    sampleErrors: [],
-  };
-
-  let after: string | null = null;
-
-  while (true) {
-    const data = await graphqlJson<{
-      productVariants: {
-        nodes: Array<{
-          id: string;
-          inventoryPolicy: "CONTINUE" | "DENY";
-          product: { id: string };
-          inventoryItem?: { id: string; tracked: boolean } | null;
-        }>;
-        pageInfo: { hasNextPage: boolean; endCursor?: string | null };
-      };
-    }>(
-      admin,
-      `#graphql
-        query InventoryResetVariants($after: String) {
-          productVariants(first: 250, after: $after) {
-            nodes {
-              id
-              inventoryPolicy
-              product { id }
-              inventoryItem { id tracked }
-            }
-            pageInfo { hasNextPage endCursor }
-          }
-        }`,
-      { after },
-    );
-
-    const variants = data.productVariants.nodes;
-    result.variantsScanned += variants.length;
-
-    const inventoryItemIds: string[] = [];
-
-    const policyByProduct = new Map<string, Array<{ id: string }>>();
-
-    for (const v of variants) {
-      if (v.inventoryPolicy !== "DENY") {
-        const list = policyByProduct.get(v.product.id) || [];
-        list.push({ id: v.id });
-        policyByProduct.set(v.product.id, list);
-      }
-
-      if (v.inventoryItem?.id) {
-        // Skip variants that don't track inventory; there won't be inventory levels to adjust.
-        if (v.inventoryItem.tracked) {
-          inventoryItemIds.push(v.inventoryItem.id);
-        }
-      }
-    }
-
-    // 1) Set inventory quantities to 0 by adjusting current available quantities down to 0.
-    // This avoids compare-and-set requirements some shops enforce on inventorySetQuantities.
-    const uniqueInventoryItemIds = Array.from(new Set(inventoryItemIds));
-    const changes = await getInventoryZeroingChanges({
-      admin,
-      inventoryItemIds: uniqueInventoryItemIds,
-      allowedLocationIds: new Set(locationIds),
-    });
-
-    for (const chunk of chunkArray(changes, 250)) {
-      const inv = await inventoryAdjustQuantitiesWithReasonFallback(admin, {
-        name: "available",
-        changes: chunk,
-      });
-
-      result.inventoryAdjustCalls += 1;
-      const errors = inv.inventoryAdjustQuantities.userErrors || [];
-      for (const e of errors) {
-        if (e.code === "ITEM_NOT_STOCKED_AT_LOCATION") {
-          result.inventoryAdjustIgnoredNotStockedErrors += 1;
-          continue;
-        }
-        result.ok = false;
-        result.inventoryAdjustUserErrors += 1;
-        if (result.sampleErrors.length < 25) {
-          result.sampleErrors.push({
-            scope: "inventoryAdjustQuantities",
-            message: e.message,
-            code: e.code || undefined,
-          });
-        }
-      }
-    }
-
-    // 2) Ensure variants don't continue selling when out of stock (batched by product).
-    for (const [productId, variantsForProduct] of policyByProduct.entries()) {
-      for (const chunk of chunkArray(variantsForProduct, 250)) {
-        const res = await graphqlJson<{
-          productVariantsBulkUpdate: {
-            productVariants?: Array<{ id: string; inventoryPolicy: string }>;
-            userErrors: Array<{ message: string; code?: string | null }>;
-          };
-        }>(
-          admin,
-          `#graphql
-            mutation InventoryResetDenyPolicy($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-              productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-                productVariants { id inventoryPolicy }
-                userErrors { message code }
-              }
-            }`,
-          {
-            productId,
-            variants: chunk.map((v) => ({ id: v.id, inventoryPolicy: "DENY" })),
-          },
-        );
-
-        result.policyUpdateCalls += 1;
-        result.policyUpdatedVariants += chunk.length;
-
-        const errors = res.productVariantsBulkUpdate.userErrors || [];
-        for (const e of errors) {
-          result.ok = false;
-          result.policyUpdateUserErrors += 1;
-          if (result.sampleErrors.length < 25) {
-            result.sampleErrors.push({
-              scope: "productVariantsBulkUpdate",
-              message: e.message,
-              code: e.code || undefined,
-            });
-          }
-        }
-      }
-    }
-
-    if (!data.productVariants.pageInfo.hasNextPage) break;
-    after = data.productVariants.pageInfo.endCursor || null;
-  }
-
-  return result;
-}
-
-async function inventoryAdjustQuantitiesWithReasonFallback(
-  admin: { graphql: Function },
-  input: { name: "available" | "on_hand"; changes: InventoryChangeInputLike[] },
-) {
-  const reasonFallbacks = ["correction", "cycle_count", "other"];
-
-  let lastResponse: {
-    inventoryAdjustQuantities: {
-      inventoryAdjustmentGroup?: { id: string } | null;
-      userErrors: Array<{ message: string; code?: string | null }>;
-    };
-  } | null = null;
-
-  for (const reason of reasonFallbacks) {
-    const inv = await graphqlJson<{
-      inventoryAdjustQuantities: {
-        inventoryAdjustmentGroup?: { id: string } | null;
-        userErrors: Array<{ message: string; code?: string | null }>;
-      };
-    }>(
-      admin,
-      `#graphql
-        mutation InventoryResetAdjustQuantities($input: InventoryAdjustQuantitiesInput!) {
-          inventoryAdjustQuantities(input: $input) {
-            inventoryAdjustmentGroup { id }
-            userErrors { message code }
-          }
-        }`,
-      {
-        input: {
-          name: input.name,
-          reason,
-          changes: input.changes,
-        },
-      },
-    );
-
-    lastResponse = inv;
-    const hasInvalidReason = (inv.inventoryAdjustQuantities.userErrors || []).some(
-      (e) => e.code === "INVALID_REASON",
-    );
-    if (!hasInvalidReason) return inv;
-  }
-
-  return lastResponse!;
-}
-
-async function getInventoryZeroingChanges({
-  admin,
-  inventoryItemIds,
-  allowedLocationIds,
-}: {
-  admin: { graphql: Function };
-  inventoryItemIds: string[];
-  allowedLocationIds: Set<string>;
-}): Promise<InventoryChangeInputLike[]> {
-  const changes: InventoryChangeInputLike[] = [];
-
-  for (const chunk of chunkArray(inventoryItemIds, 50)) {
-    const data = await graphqlJson<{
-      nodes: Array<
-        | {
-            __typename: "InventoryItem";
-            id: string;
-            inventoryLevels: {
-              nodes: Array<{
-                location: { id: string };
-                quantities: Array<{ name: string; quantity: number }>;
-              }>;
-            };
-          }
-        | { __typename: string }
-        | null
-      >;
-    }>(
-      admin,
-      `#graphql
-        query InventoryResetInventoryLevels($ids: [ID!]!) {
-          nodes(ids: $ids) {
-            __typename
-            ... on InventoryItem {
-              id
-              inventoryLevels(first: 250) {
-                nodes {
-                  location { id }
-                  quantities(names: ["available"]) { name quantity }
-                }
-              }
-            }
-          }
-        }`,
-      { ids: chunk },
-    );
-
-    for (const node of data.nodes) {
-      if (!node || node.__typename !== "InventoryItem") continue;
-      for (const level of node.inventoryLevels.nodes) {
-        if (!allowedLocationIds.has(level.location.id)) continue;
-        const available = level.quantities.find((q) => q.name === "available");
-        if (!available) continue;
-        if (available.quantity === 0) continue;
-        changes.push({
-          inventoryItemId: node.id,
-          locationId: level.location.id,
-          delta: -available.quantity,
-        });
-      }
-    }
-  }
-
-  return changes;
-}
-
-async function graphqlJson<T>(
-  admin: { graphql: Function },
-  query: string,
-  variables: Record<string, unknown>,
-) {
-  const response = await admin.graphql(query, { variables });
-  const body = (await response.json()) as { data?: T; errors?: unknown };
-
-  if (!body.data) {
-    throw new Error(
-      `Shopify GraphQL request failed: ${JSON.stringify(body.errors || body)}`,
-    );
-  }
-
-  return body.data;
-}
-
-function chunkArray<T>(arr: T[], chunkSize: number): T[][] {
-  if (chunkSize <= 0) return [arr];
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += chunkSize) {
-    out.push(arr.slice(i, i + chunkSize));
-  }
-  return out;
-}
-
-type InventoryChangeInputLike = {
-  inventoryItemId: string;
-  locationId: string;
-  delta: number;
-};
 
 

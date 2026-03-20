@@ -39,6 +39,25 @@ shopify app init --template=https://github.com/Shopify/shopify-app-template-remi
 shopify app dev
 ```
 
+### Local Development Database
+
+`shopify app dev` requires `DATABASE_URL` and `DIRECT_URL` for Prisma. Set these in a local `.env` file (never committed). Production uses Vercel's env vars and is unaffected.
+
+1. Copy `.env.example` to `.env`:
+   ```shell
+   cp .env.example .env
+   ```
+
+2. Start a local Postgres instance (choose one):
+   - **Docker**: `docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=shopify_dev postgres:16`
+   - **Docker Compose**: `docker compose up -d` (if `docker-compose.yml` is present)
+   - **Homebrew** (macOS): `brew install postgresql@16`, then create a `shopify_dev` database
+   - **Separate Neon/Supabase dev project**: Create a new free project (different from production) and use its connection strings in `.env`
+
+3. Adjust `.env` if your local Postgres uses different credentials or port.
+
+4. Run `shopify app dev` — Prisma loads `.env` automatically and uses the local database.
+
 ## Inventory reset tool (this app)
 
 This app includes an embedded admin page at **Inventory reset** (`/app/inventory-reset`) with a single button that:

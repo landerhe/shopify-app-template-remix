@@ -27,14 +27,8 @@ export default function App() {
         <Link to="/app/archive" prefetch="intent">
           Bulk archive
         </Link>
-        <Link to="/app/additional" prefetch="intent">
-          Additional page
-        </Link>
         <Link to="/app/inventory-reset" prefetch="intent">
           Inventory reset
-        </Link>
-        <Link to="/app/inventory-scan" prefetch="intent">
-          Inventory scan
         </Link>
       </NavMenu>
       <Outlet />

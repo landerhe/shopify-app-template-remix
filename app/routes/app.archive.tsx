@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { useFetcher } from "@remix-run/react";
@@ -7,6 +7,7 @@ import {
   BlockStack,
   Button,
   Card,
+  Checkbox,
   Divider,
   FormLayout,
   InlineStack,
@@ -14,23 +15,28 @@ import {
   List,
   Modal,
   Page,
+  ProgressBar,
   Text,
   TextField,
 } from "@shopify/polaris";
 import { TitleBar, useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import {
-  archiveProductsByQuery,
-  buildProductSearchQuery,
+  unarchiveProductsByQuery,
   type ArchiveResult,
+  type UnarchiveResult,
 } from "../utils/archive-products.server";
 
-type ArchiveActionData = ArchiveResult & { intent: "archive" };
-
-type ArchiveErrorData = {
-  intent: "error";
-  message: string;
+type ArchiveProgress = {
+  currentTitle: string;
+  scanned: number;
+  archived: number;
+  alreadyArchived: number;
+  done: boolean;
+  result?: ArchiveResult;
 };
+
+const PROGRESS_THROTTLE_MS = 100;
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
@@ -42,68 +48,195 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
 
-  if (intent !== "archive") {
-    return json<ArchiveErrorData>(
-      { intent: "error", message: "Invalid intent" },
-      { status: 400 }
-    );
+  if (intent !== "unarchive") {
+    return json({ error: "Invalid intent" }, { status: 400 });
   }
 
   const vendor = String(formData.get("vendor") || "").trim();
   const tags = String(formData.get("tags") || "").trim();
   const titleContains = String(formData.get("titleContains") || "").trim();
+  const unarchiveAll = formData.get("archiveAll") === "true";
+  const hasConditions = Boolean(vendor || tags || titleContains);
 
-  const query = buildProductSearchQuery({ vendor, tags, titleContains });
-
-  if (!query) {
-    return json<ArchiveErrorData>(
-      { intent: "error", message: "Enter at least one condition." },
+  if (!unarchiveAll && !hasConditions) {
+    return json(
+      {
+        error:
+          "Enter at least one condition or select Archive all products to unarchive all archived products.",
+      },
       { status: 400 }
     );
   }
 
-  const result = await archiveProductsByQuery(admin, { query });
-  return json<ArchiveActionData>({ intent: "archive", ...result });
+  const result = await unarchiveProductsByQuery(admin, {
+    query: null,
+    conditions: unarchiveAll ? undefined : { vendor, tags, titleContains },
+  });
+  return json<UnarchiveResult & { intent: "unarchive" }>({
+    intent: "unarchive",
+    ...result,
+  });
 };
 
 export default function ArchiveRoute() {
   const shopify = useAppBridge();
-  const fetcher = useFetcher<typeof action>();
+  const unarchiveFetcher = useFetcher<typeof action>();
   const [vendor, setVendor] = useState("");
   const [tags, setTags] = useState("");
   const [titleContains, setTitleContains] = useState("");
+  const [archiveAll, setArchiveAll] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmUnarchiveOpen, setConfirmUnarchiveOpen] = useState(false);
+  const [isRunning, setIsRunning] = useState(false);
+  const [archiveResult, setArchiveResult] = useState<ArchiveResult | null>(null);
+  const [hasError, setHasError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<ArchiveProgress | null>(null);
+  const [unarchiveResult, setUnarchiveResult] =
+    useState<UnarchiveResult | null>(null);
+  const lastProgressUpdate = useRef(0);
+  const pendingProgress = useRef<ArchiveProgress | null>(null);
 
-  const isRunning =
-    ["loading", "submitting"].includes(fetcher.state) &&
-    fetcher.formMethod === "POST";
+  const isUnarchiveRunning =
+    ["loading", "submitting"].includes(unarchiveFetcher.state) &&
+    unarchiveFetcher.formMethod === "POST";
 
-  const result = fetcher.data;
-  const hasResult = Boolean(result && "scanned" in result);
-  const archiveResult = hasResult ? (result as ArchiveActionData) : null;
-  const hasError =
-    result && "intent" in result && result.intent === "error";
+  const unarchiveData = unarchiveFetcher.data;
+  const hasUnarchiveResult =
+    Boolean(unarchiveData) &&
+    "intent" in unarchiveData &&
+    unarchiveData.intent === "unarchive";
+  const resolvedUnarchiveResult = hasUnarchiveResult
+    ? (unarchiveData as UnarchiveResult & { intent: "unarchive" })
+    : null;
 
-  const hasConditions = Boolean(
-    vendor.trim() || tags.trim() || titleContains.trim()
-  );
+  const flushProgress = useCallback(() => {
+    if (pendingProgress.current) {
+      setProgress(pendingProgress.current);
+      pendingProgress.current = null;
+    }
+  }, []);
 
-  const onArchive = () => {
+  const hasConditions =
+    archiveAll ||
+    Boolean(vendor.trim() || tags.trim() || titleContains.trim());
+
+  const onArchive = useCallback(async () => {
     setConfirmOpen(false);
+    setHasError(null);
+    setArchiveResult(null);
+    setProgress(null);
+    setIsRunning(true);
+    shopify.toast.show("Archiving matching products…");
+
     const formData = new FormData();
     formData.set("intent", "archive");
+    formData.set("archiveAll", String(archiveAll));
     formData.set("vendor", vendor);
     formData.set("tags", tags);
     formData.set("titleContains", titleContains);
-    fetcher.submit(formData, { method: "post" });
-    shopify.toast.show("Archiving matching products…");
-  };
+
+    try {
+      const res = await fetch("/app/api/archive-progress", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        setHasError(
+          (errData as { message?: string }).message ?? "Archive request failed"
+        );
+        return;
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) {
+        setHasError("Streaming not supported");
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const update = JSON.parse(line) as ArchiveProgress & {
+              error?: string;
+              message?: string;
+            };
+            if (update.error) {
+              setHasError(update.message ?? update.error);
+              return;
+            }
+
+            const now = Date.now();
+            pendingProgress.current = update;
+            if (now - lastProgressUpdate.current >= PROGRESS_THROTTLE_MS) {
+              lastProgressUpdate.current = now;
+              setProgress(update);
+              pendingProgress.current = null;
+            }
+
+            if (update.done && update.result) {
+              setArchiveResult(update.result);
+              if (update.result.ok) shopify.toast.show("Archiving complete");
+              else shopify.toast.show("Archiving finished with errors");
+            }
+          } catch {
+            // Skip malformed lines
+          }
+        }
+      }
+
+      flushProgress();
+    } catch (err) {
+      setHasError(err instanceof Error ? err.message : "Archive failed");
+    } finally {
+      setIsRunning(false);
+    }
+  }, [archiveAll, vendor, tags, titleContains, shopify, flushProgress]);
 
   useEffect(() => {
-    if (!archiveResult) return;
-    if (archiveResult.ok) shopify.toast.show("Archiving complete");
-    else shopify.toast.show("Archiving finished with errors");
-  }, [archiveResult, shopify]);
+    if (!isRunning && pendingProgress.current) {
+      flushProgress();
+    }
+  }, [isRunning, flushProgress]);
+
+  useEffect(() => {
+    if (unarchiveFetcher.data && "error" in unarchiveFetcher.data) {
+      setHasError(
+        (unarchiveFetcher.data as { error?: string }).error ?? "Unarchive failed"
+      );
+      return;
+    }
+    if (resolvedUnarchiveResult) {
+      setUnarchiveResult(resolvedUnarchiveResult);
+      if (resolvedUnarchiveResult.ok)
+        shopify.toast.show("Set active complete");
+      else shopify.toast.show("Set active finished with errors");
+    }
+  }, [unarchiveFetcher.data, resolvedUnarchiveResult, shopify]);
+
+  const onUnarchive = () => {
+    setConfirmUnarchiveOpen(false);
+    const formData = new FormData();
+    formData.set("intent", "unarchive");
+    formData.set("archiveAll", String(archiveAll));
+    formData.set("vendor", vendor);
+    formData.set("tags", tags);
+    formData.set("titleContains", titleContains);
+    unarchiveFetcher.submit(formData, { method: "post" });
+    shopify.toast.show("Setting matching products active…");
+  };
 
   return (
     <Page backAction={{ content: "Home", url: "/app" }}>
@@ -113,17 +246,30 @@ export default function ArchiveRoute() {
           <BlockStack gap="500">
             {hasError && (
               <Banner
-                title="Validation error"
+                title="Error"
                 tone="critical"
-                onDismiss={() => {}}
+                onDismiss={() => setHasError(null)}
               >
                 <Text as="p" variant="bodyMd">
-                  {(result as ArchiveErrorData).message}
+                  {hasError}
                 </Text>
               </Banner>
             )}
 
-            {hasResult && archiveResult?.ok && (
+            {isRunning && progress && (
+              <Card>
+                <BlockStack gap="300">
+                  <ProgressBar progress={75} size="small" tone="primary" />
+                  <Text as="p" variant="bodyMd">
+                    {progress.currentTitle
+                      ? `Processing: ${progress.currentTitle} — ${progress.scanned} scanned, ${progress.archived} archived`
+                      : `Archiving… ${progress.scanned} scanned, ${progress.archived} archived`}
+                  </Text>
+                </BlockStack>
+              </Card>
+            )}
+
+            {archiveResult?.ok && (
               <Banner title="Done" tone="success">
                 <Text as="p" variant="bodyMd">
                   Archived {archiveResult.archived} product
@@ -132,7 +278,7 @@ export default function ArchiveRoute() {
               </Banner>
             )}
 
-            {hasResult && archiveResult && !archiveResult.ok && (
+            {archiveResult && !archiveResult.ok && (
               <Banner title="Some products could not be archived" tone="critical">
                 <Text as="p" variant="bodyMd">
                   The job finished, but Shopify returned errors for some
@@ -147,18 +293,26 @@ export default function ArchiveRoute() {
                   Archive products by conditions
                 </Text>
                 <Text as="p" variant="bodyMd">
-                  Set one or more conditions to match products. All matching
-                  products will be archived.
+                  Set one or more conditions to match products, or archive all
+                  products. All matching products will be archived. Use "Set
+                  active" to unarchive archived products.
                 </Text>
 
                 <FormLayout>
+                  <Checkbox
+                    label="Archive all / Unarchive all archived"
+                    checked={archiveAll}
+                    onChange={setArchiveAll}
+                    disabled={isRunning || isUnarchiveRunning}
+                    helpText="When checked, all products will be archived (or all archived products will be set active). Conditions below are ignored."
+                  />
                   <TextField
                     label="Vendor"
                     value={vendor}
                     onChange={setVendor}
                     placeholder="e.g. Acme"
                     autoComplete="off"
-                    disabled={isRunning}
+                    disabled={isRunning || isUnarchiveRunning || archiveAll}
                   />
                   <TextField
                     label="Tags"
@@ -166,8 +320,8 @@ export default function ArchiveRoute() {
                     onChange={setTags}
                     placeholder="e.g. sale, clearance"
                     autoComplete="off"
-                    disabled={isRunning}
-                    helpText="Comma-separated list of tags. Products must have all listed tags."
+                    disabled={isRunning || isUnarchiveRunning || archiveAll}
+                    helpText="Comma-separated list of tags. Products with any listed tag will match."
                   />
                   <TextField
                     label="Title contains"
@@ -175,7 +329,7 @@ export default function ArchiveRoute() {
                     onChange={setTitleContains}
                     placeholder='e.g. hoodie or "green hoodie"'
                     autoComplete="off"
-                    disabled={isRunning}
+                    disabled={isRunning || isUnarchiveRunning || archiveAll}
                     helpText="Words or phrase to search in product title."
                   />
                 </FormLayout>
@@ -194,10 +348,18 @@ export default function ArchiveRoute() {
 
                 <InlineStack gap="300" align="end">
                   <Button
+                    variant="primary"
+                    loading={isUnarchiveRunning}
+                    disabled={!hasConditions || isRunning}
+                    onClick={() => setConfirmUnarchiveOpen(true)}
+                  >
+                    Set active (unarchive) matching products
+                  </Button>
+                  <Button
                     tone="critical"
                     variant="primary"
                     loading={isRunning}
-                    disabled={!hasConditions}
+                    disabled={!hasConditions || isUnarchiveRunning}
                     onClick={() => setConfirmOpen(true)}
                   >
                     Archive matching products
@@ -206,7 +368,48 @@ export default function ArchiveRoute() {
               </BlockStack>
             </Card>
 
-            {hasResult && archiveResult && (
+            {unarchiveResult && (
+              <Card>
+                <BlockStack gap="300">
+                  <Text as="h2" variant="headingMd">
+                    Set active summary
+                  </Text>
+                  <Divider />
+                  <List type="bullet">
+                    <List.Item>
+                      Archived products scanned: {unarchiveResult.scanned}
+                    </List.Item>
+                    <List.Item>Set active: {unarchiveResult.activated}</List.Item>
+                    <List.Item>
+                      Shopify user errors: {unarchiveResult.userErrors}
+                    </List.Item>
+                  </List>
+
+                  {unarchiveResult.sampleErrors.length > 0 && (
+                    <>
+                      <Divider />
+                      <Text as="h3" variant="headingSm">
+                        Sample errors
+                      </Text>
+                      <List type="bullet">
+                        {unarchiveResult.sampleErrors
+                          .slice(0, 10)
+                          .map((e, idx) => (
+                            <List.Item key={`${e.scope}-${idx}`}>
+                              {e.scope}: {e.message}
+                              {e.field?.length
+                                ? ` (field: ${e.field.join(".")})`
+                                : ""}
+                            </List.Item>
+                          ))}
+                      </List>
+                    </>
+                  )}
+                </BlockStack>
+              </Card>
+            )}
+
+            {archiveResult && (
               <Card>
                 <BlockStack gap="300">
                   <Text as="h2" variant="headingMd">
@@ -252,9 +455,39 @@ export default function ArchiveRoute() {
       </Layout>
 
       <Modal
+        open={confirmUnarchiveOpen}
+        onClose={() => setConfirmUnarchiveOpen(false)}
+        title={
+          archiveAll
+            ? "Set all archived products active?"
+            : "Set active (unarchive) matching products?"
+        }
+        primaryAction={{
+          content: "Yes, set them active",
+          onAction: onUnarchive,
+          loading: isUnarchiveRunning,
+        }}
+        secondaryActions={[
+          {
+            content: "Cancel",
+            onAction: () => setConfirmUnarchiveOpen(false),
+            disabled: isUnarchiveRunning,
+          },
+        ]}
+      >
+        <Modal.Section>
+          <Text as="p" variant="bodyMd">
+            {archiveAll
+              ? "This will set all archived products back to active. They will become visible on your sales channels."
+              : "This will set all archived products that match your conditions back to active. They will become visible on your sales channels."}
+          </Text>
+        </Modal.Section>
+      </Modal>
+
+      <Modal
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
-        title="Archive matching products?"
+        title={archiveAll ? "Archive all products?" : "Archive matching products?"}
         primaryAction={{
           content: "Yes, archive them",
           destructive: true,
@@ -271,9 +504,9 @@ export default function ArchiveRoute() {
       >
         <Modal.Section>
           <Text as="p" variant="bodyMd">
-            This will archive every product that matches your conditions. You can
-            unarchive later, but this action may impact storefront visibility
-            immediately.
+            {archiveAll
+              ? "This will archive every product in your store. You can unarchive later, but this action may impact storefront visibility immediately."
+              : "This will archive every product that matches your conditions. You can unarchive later, but this action may impact storefront visibility immediately."}
           </Text>
         </Modal.Section>
       </Modal>

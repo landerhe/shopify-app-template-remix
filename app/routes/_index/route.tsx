@@ -22,9 +22,9 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
-        <h1 className={styles.heading}>A short heading about [your app]</h1>
+        <h1 className={styles.heading}>1Click Archive and Empty Stock</h1>
         <p className={styles.text}>
-          A tagline about [your app] that describes your value proposition.
+          Bulk archive products by conditions and reset inventory policies in one click.
         </p>
         {showForm && (
           <Form className={styles.form} method="post" action="/auth/login">
@@ -40,16 +40,13 @@ export default function App() {
         )}
         <ul className={styles.list}>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Bulk archive</strong>. Archive products by vendor, tags, or title.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Inventory scan</strong>. Find variants with "continue selling when out of stock" policy.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Inventory reset</strong>. Set all inventory to zero and update policies.
           </li>
         </ul>
       </div>
